@@ -72,12 +72,17 @@ def make_input_stream(input, charset):
 class Result(object):
     """Holds the captured result of an invoked CLI script."""
 
-    def __init__(self, runner, output_bytes, exit_code, exception,
-                 exc_info=None):
+    def __init__(self, runner, stdout_bytes, exit_code, exception,
+                 exc_info=None, stderr_bytes=None, output_bytes=None):
+        # alias old argument
+        if output_bytes:
+            stdout_bytes = output_bytes
         #: The runner that created the result
         self.runner = runner
-        #: The output as bytes.
-        self.output_bytes = output_bytes
+        #: The stdout as bytes.
+        self.stdout_bytes = stdout_bytes
+        #: The stderr as bytes.
+        self.stderr_bytes = stderr_bytes
         #: The exit code as integer.
         self.exit_code = exit_code
         #: The exception that happend if one did.
@@ -86,10 +91,21 @@ class Result(object):
         self.exc_info = exc_info
 
     @property
-    def output(self):
-        """The output as unicode string."""
-        return self.output_bytes.decode(self.runner.charset, 'replace') \
+    def stdout(self):
+        """stdout as unicode string."""
+        return self.stdout_bytes.decode(self.runner.charset, 'replace') \
             .replace('\r\n', '\n')
+
+    @property
+    def stderr(self):
+        """stderr as unicode string."""
+        return self.stderr_bytes.decode(self.runner.charset, 'replace') \
+            .replace('\r\n', '\n')
+
+    @property
+    def output(self):
+        """The combined stdout + stderr as unicode string."""
+        return self.stdout + '\n' + self.stderr
 
     def __repr__(self):
         return '<Result %s>' % (
@@ -149,7 +165,7 @@ class CliRunner(object):
 
         :param input: the input stream to put into sys.stdin.
         :param env: the environment overrides as dictionary.
-        :param color: whether the output should contain color codes. The
+        :param color: whether the stdout/stderr should contain color codes. The
                       application can still override this explicitly.
         """
         input = make_input_stream(input, self.charset)
@@ -163,16 +179,20 @@ class CliRunner(object):
         env = self.make_env(env)
 
         if PY2:
-            sys.stdout = sys.stderr = bytes_output = StringIO()
+            sys.stdout = stdout_bytes = StringIO()
+            sys.stderr = stderr_bytes = StringIO()
             if self.echo_stdin:
-                input = EchoingStdin(input, bytes_output)
+                input = EchoingStdin(input, stdout_bytes)
         else:
-            bytes_output = io.BytesIO()
+            stdout_bytes = io.BytesIO()
+            stderr_bytes = io.BytesIO()
             if self.echo_stdin:
-                input = EchoingStdin(input, bytes_output)
+                input = EchoingStdin(input, stdout_bytes)
             input = io.TextIOWrapper(input, encoding=self.charset)
-            sys.stdout = sys.stderr = io.TextIOWrapper(
-                bytes_output, encoding=self.charset)
+            sys.stdout = io.TextIOWrapper(
+                stdout_bytes, encoding=self.charset)
+            sys.stderr = io.TextIOWrapper(
+                stderr_bytes, encoding=self.charset)
 
         sys.stdin = input
 
@@ -221,7 +241,7 @@ class CliRunner(object):
                         pass
                 else:
                     os.environ[key] = value
-            yield bytes_output
+            yield (stdout_bytes, stderr_bytes)
         finally:
             for key, value in iteritems(old_env):
                 if value is None:
@@ -296,10 +316,14 @@ class CliRunner(object):
                 exc_info = sys.exc_info()
             finally:
                 sys.stdout.flush()
-                output = out.getvalue()
+                sys.stderr.flush()
+                stdout_bytes, stderr_bytes = out
+                stdout = stdout_bytes.getvalue()
+                stderr = stderr_bytes.getvalue()
 
         return Result(runner=self,
-                      output_bytes=output,
+                      stdout_bytes=stdout,
+                      stderr_bytes=stderr,
                       exit_code=exit_code,
                       exception=exception,
                       exc_info=exc_info)
